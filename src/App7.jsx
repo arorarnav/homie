@@ -165,10 +165,17 @@ function UploadForm({ onClose, onSuccess, activeTab }) {
     setUploading(false)
   }
 
-  async function submit() {
+async function submit() {
     if (!form.title || !form.price || !form.phone || !form.owner_name) { setError("Please fill name, phone, title and price."); return }
     setLoading(true)
-    const { error } = await supabase.from("listings").insert([form]).select()
+    const cleaned = {
+      ...form,
+      price: Number(form.price),
+      beds: form.beds === "" ? null : Number(form.beds),
+      baths: form.baths === "" ? null : Number(form.baths),
+      sqft: form.sqft === "" ? null : Number(form.sqft),
+    }
+    const { error } = await supabase.from("listings").insert([cleaned]).select()
     setLoading(false)
     if (error) { setError(error.message); return }
     onSuccess()
