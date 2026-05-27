@@ -69,6 +69,90 @@ async function fetchNearby(lat, lng, type) {
   } catch { return [] }
 }
 
+async function calculateWalkScore(lat, lng) {
+  const categories = [
+    { key: "grocery", label: "Grocery & supermarkets", filter: 'shop~"supermarket|convenience|grocery"', weight: 3.0 },
+    { key: "pharmacy", label: "Pharmacies", filter: 'amenity=pharmacy', weight: 2.5 },
+    { key: "transit", label: "Metro & bus stops", filter: 'public_transport~"station|stop_position|platform"', weight: 3.0 },
+    { key: "cafe", label: "Cafes", filter: 'amenity=cafe', weight: 1.5 },
+    { key: "restaurant", label: "Restaurants", filter: 'amenity=restaurant', weight: 1.5 },
+    { key: "atm", label: "ATMs & banks", filter: 'amenity~"atm|bank"', weight: 1.5 },
+    { key: "park", label: "Parks & green spaces", filter: 'leisure=park', weight: 2.0 },
+    { key: "gym", label: "Gyms & fitness", filter: 'leisure=fitness_centre', weight: 1.5 },
+    { key: "school", label: "Schools", filter: 'amenity~"school|college"', weight: 2.0 },
+    { key: "hospital", label: "Hospitals & clinics", filter: 'amenity~"hospital|clinic"', weight: 2.0 },
+  ]
+  // build single combined query with named results
+  const queryParts = categories.map((cat, i) =>
+    `node[${cat.filter}](around:1600,${lat},${lng})->.r${i};`
+  ).join("")
+  const outParts = categories.map((cat, i) =>
+    `.r${i} out;`
+  ).join("")
+  const fullQuery = `[out:json][timeout:25];(${queryParts});out;`
+
+  // try multiple endpoints
+  const endpoints = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.openstreetmap.fr/api/interpreter",
+  ]
+
+  let allPlaces = []
+  for (const endpoint of endpoints) {
+    try {
+      const res = await fetch(endpoint, { method: "POST", body: fullQuery })
+      if (!res.ok) continue
+      const data = await res.json()
+      allPlaces = data.elements || []
+      if (allPlaces.length > 0) break
+    } catch { continue }
+  }
+
+  // categorize results
+  const breakdown = []
+  let totalScore = 0
+  for (const cat of categories) {
+    const matches = allPlaces.filter(p => {
+      if (!p.tags) return false
+      if (cat.key === "grocery") return p.tags.shop && ["supermarket","convenience","grocery"].includes(p.tags.shop)
+      if (cat.key === "pharmacy") return p.tags.amenity === "pharmacy"
+      if (cat.key === "transit") return p.tags.public_transport
+      if (cat.key === "cafe") return p.tags.amenity === "cafe"
+      if (cat.key === "restaurant") return p.tags.amenity === "restaurant"
+      if (cat.key === "atm") return p.tags.amenity === "atm" || p.tags.amenity === "bank"
+      if (cat.key === "park") return p.tags.leisure === "park"
+      if (cat.key === "gym") return p.tags.leisure === "fitness_centre"
+      if (cat.key === "school") return p.tags.amenity === "school" || p.tags.amenity === "college"
+      if (cat.key === "hospital") return p.tags.amenity === "hospital" || p.tags.amenity === "clinic"
+      return false
+    })
+    let categoryScore = 0
+    let within400 = 0, within800 = 0, within1600 = 0
+    const placesScored = matches.slice(0, 3)
+    for (const place of placesScored) {
+      const dist = getDistanceKm(lat, lng, place.lat, place.lon) * 1000
+      if (dist < 400) { categoryScore += cat.weight * 1.0; within400++ }
+      else if (dist < 800) { categoryScore += cat.weight * 0.5; within800++ }
+      else if (dist < 1600) { categoryScore += cat.weight * 0.25; within1600++ }
+    }
+    totalScore += categoryScore
+    if (matches.length > 0) {
+      breakdown.push({ label: cat.label, count: matches.length, within400, within800, within1600 })
+    }
+  }
+  const finalScore = Math.min(100, Math.round(totalScore * 1.8))
+  return { score: finalScore, breakdown }
+}
+
+function getWalkScoreLabel(score) {
+  if (score >= 90) return { label: "Walker's Paradise", desc: "Daily errands don't need a vehicle" }
+  if (score >= 70) return { label: "Very Walkable", desc: "Most errands can be done on foot" }
+  if (score >= 50) return { label: "Somewhat Walkable", desc: "Some errands on foot, others need transport" }
+  if (score >= 25) return { label: "Car-Dependent", desc: "Most errands need a vehicle" }
+  return { label: "Car-Required", desc: "Almost nothing within walking distance" }
+}
+
 async function shareListing(listing) {
   const url = window.location.origin
   const text = `Check out this property on Homie — ${listing.title} in ${listing.location} for ₹${Number(listing.price).toLocaleString()}/mo. ${url}`
@@ -307,7 +391,23 @@ function ListingDetail({ listing, onClose, onSave, isSaved }) {
   const [tab, setTab] = useState("overview")
   const [nearby, setNearby] = useState({ hospital: [], cafe: [], gym: [], education: [] })
   const [loadingNearby, setLoadingNearby] = useState(false)
+  const [walkScore, setWalkScore] = useState(null)
+  const [loadingWalk, setLoadingWalk] = useState(false)
   const photos = getPhotos(listing)
+
+  useEffect(() => {
+    if (tab === "walk score" && listing.latitude && listing.longitude && !walkScore) {
+      const cacheKey = `homie_walkscore_${listing.id}`
+      const cached = localStorage.getItem(cacheKey)
+      if (cached) { setWalkScore(JSON.parse(cached)); return }
+      setLoadingWalk(true)
+      calculateWalkScore(listing.latitude, listing.longitude).then(result => {
+        setWalkScore(result)
+        localStorage.setItem(cacheKey, JSON.stringify(result))
+        setLoadingWalk(false)
+      })
+    }
+  }, [tab])
 
   useEffect(() => {
     if (tab === "neighborhood" && listing.latitude && listing.longitude) {
@@ -321,7 +421,7 @@ function ListingDetail({ listing, onClose, onSave, isSaved }) {
     }
   }, [tab])
 
-  const tabs = ["overview", "amenities", "neighborhood", "location"]
+  const tabs = ["overview", "walk score", "amenities", "neighborhood", "location"]
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col" style={{ background: C.bg, fontFamily: FONT }}>
@@ -392,7 +492,59 @@ function ListingDetail({ listing, onClose, onSave, isSaved }) {
               </div>
             </div>
           )}
+{tab === "walk score" && (
+            <div>
+              {!listing.latitude ? (
+                <p className="text-center py-12" style={{ color: C.textMuted, fontSize: 14 }}>Owner hasn't pinned this property — walk score unavailable</p>
+              ) : loadingWalk ? (
+                <p className="text-center py-12 animate-pulse" style={{ color: C.textMuted, fontSize: 14 }}>Calculating walkability...</p>
+              ) : walkScore ? (
+                <div className="flex flex-col gap-6">
+                  {/* big score */}
+                  <div className="rounded-2xl p-6 text-center" style={{ background: C.surface }}>
+                    <p style={{ color: C.text, fontSize: 72, fontWeight: 700, letterSpacing: "-0.04em", lineHeight: 1 }}>
+                      {walkScore.score}
+                    </p>
+                    <p style={{ color: C.textMuted, fontSize: 13, marginTop: 4 }}>out of 100</p>
+                    <p style={{ color: C.accent, fontSize: 18, fontWeight: 600, marginTop: 16 }}>
+                      {getWalkScoreLabel(walkScore.score).label}
+                    </p>
+                    <p style={{ color: C.textMuted, fontSize: 13, marginTop: 4 }}>
+                      {getWalkScoreLabel(walkScore.score).desc}
+                    </p>
+                  </div>
 
+                  {/* breakdown */}
+                  <div>
+                    <p style={{ color: C.textMuted, fontSize: 13, fontWeight: 600, marginBottom: 12 }}>What's around you</p>
+                    <div className="flex flex-col gap-2">
+                      {walkScore.breakdown.length === 0 ? (
+                        <p style={{ color: C.textSubtle, fontSize: 13 }}>Nothing significant within walking distance</p>
+                      ) : walkScore.breakdown.map((cat, i) => (
+                        <div key={i} className="rounded-xl px-4 py-3 flex items-center justify-between" style={{ background: C.surface }}>
+                          <div>
+                            <p style={{ color: C.text, fontSize: 14, fontWeight: 500 }}>{cat.label}</p>
+                            <p style={{ color: C.textMuted, fontSize: 11, marginTop: 2 }}>
+                              {cat.within400 > 0 && `${cat.within400} within 5 min`}
+                              {cat.within400 > 0 && cat.within800 > 0 && " · "}
+                              {cat.within800 > 0 && `${cat.within800} within 10 min`}
+                              {(cat.within400 > 0 || cat.within800 > 0) && cat.within1600 > 0 && " · "}
+                              {cat.within1600 > 0 && `${cat.within1600} within 20 min`}
+                            </p>
+                          </div>
+                          <p style={{ color: C.accent, fontSize: 18, fontWeight: 700 }}>{cat.count}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <p style={{ color: C.textSubtle, fontSize: 11, lineHeight: 1.5, marginTop: 8 }}>
+                    Walk Score is based on points of interest within walking distance. Real-world walkability varies based on weather, footpaths, and safety.
+                  </p>
+                </div>
+              ) : null}
+            </div>
+          )}
           {tab === "amenities" && (
             listing.amenities && listing.amenities.length > 0 ? (
               <div className="grid grid-cols-2 gap-2">
