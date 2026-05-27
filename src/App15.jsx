@@ -396,21 +396,40 @@ function ListingDetail({ listing, onClose, onSave, isSaved }) {
   const photos = getPhotos(listing)
 
   useEffect(() => {
-    if (tab === "walk score" && listing.latitude && listing.longitude && !walkScore) {
-      const cacheKey = `homie_walkscore_${listing.id}`
-      const cached = localStorage.getItem(cacheKey)
-      if (cached) { setWalkScore(JSON.parse(cached)); return }
-      setLoadingWalk(true)
-      calculateWalkScore(listing.latitude, listing.longitude).then(result => {
-        setWalkScore(result)
-        localStorage.setItem(cacheKey, JSON.stringify(result))
-        setLoadingWalk(false)
-      })
+    if (tab === "walk score" && !walkScore) {
+      // use saved walk score from DB if available
+      if (listing.walk_score !== null && listing.walk_score !== undefined) {
+        setWalkScore({ score: listing.walk_score, breakdown: listing.walk_score_breakdown || [] })
+        return
+      }
+      // fallback: compute on the fly if not saved (old listings)
+      if (listing.latitude && listing.longitude) {
+        const cacheKey = `homie_walkscore_${listing.id}`
+        const cached = localStorage.getItem(cacheKey)
+        if (cached) { setWalkScore(JSON.parse(cached)); return }
+        setLoadingWalk(true)
+        calculateWalkScore(listing.latitude, listing.longitude).then(result => {
+          setWalkScore(result)
+          localStorage.setItem(cacheKey, JSON.stringify(result))
+          setLoadingWalk(false)
+        })
+      }
     }
   }, [tab])
 
   useEffect(() => {
     if (tab === "neighborhood" && listing.latitude && listing.longitude) {
+      // use saved data if available
+      if (listing.nearby_places) {
+        setNearby({
+          hospital: listing.nearby_places.hospital || [],
+          cafe: listing.nearby_places.cafe || [],
+          gym: listing.nearby_places.gym || [],
+          education: listing.nearby_places.education || [],
+        })
+        return
+      }
+      // fallback: fetch live for old listings
       setLoadingNearby(true)
       Promise.all([
         fetchNearby(listing.latitude, listing.longitude, "hospital"),
@@ -868,7 +887,38 @@ function UploadForm({ onClose, onSuccess, defaultCategory }) {
   async function submit() {
     if (!form.title || !form.price || !form.phone || !form.owner_name || !form.location) { setError("Please fill all required fields."); return }
     setLoading(true)
-    const cleaned = { ...form, price: Number(form.price), beds: form.beds === "" ? null : Number(form.beds), baths: form.baths === "" ? null : Number(form.baths), sqft: form.sqft === "" ? null : Number(form.sqft) }
+    let walkData = { score: null, breakdown: null }
+    let nearbyPlaces = null
+    if (form.latitude && form.longitude) {
+      try {
+        const result = await calculateWalkScore(form.latitude, form.longitude)
+        walkData = { score: result.score, breakdown: result.breakdown }
+      } catch {}
+      try {
+        const [hospital, cafe, gym, education] = await Promise.all([
+          fetchNearby(form.latitude, form.longitude, "hospital"),
+          fetchNearby(form.latitude, form.longitude, "cafe"),
+          fetchNearby(form.latitude, form.longitude, "gym"),
+          fetchNearby(form.latitude, form.longitude, "education"),
+        ])
+        nearbyPlaces = {
+          hospital: hospital.slice(0, 4).map(p => ({ name: p.tags?.name || "Unnamed", lat: p.lat, lon: p.lon })),
+          cafe: cafe.slice(0, 4).map(p => ({ name: p.tags?.name || "Unnamed", lat: p.lat, lon: p.lon })),
+          gym: gym.slice(0, 4).map(p => ({ name: p.tags?.name || "Unnamed", lat: p.lat, lon: p.lon })),
+          education: education.slice(0, 4).map(p => ({ name: p.tags?.name || "Unnamed", lat: p.lat, lon: p.lon })),
+        }
+      } catch {}
+    }
+    const cleaned = {
+      ...form,
+      price: Number(form.price),
+      beds: form.beds === "" ? null : Number(form.beds),
+      baths: form.baths === "" ? null : Number(form.baths),
+      sqft: form.sqft === "" ? null : Number(form.sqft),
+      walk_score: walkData.score,
+      walk_score_breakdown: walkData.breakdown,
+      nearby_places: nearbyPlaces,
+    }
     const { error } = await supabase.from("listings").insert([cleaned]).select()
     setLoading(false)
     if (error) { setError(error.message); return }
@@ -938,7 +988,7 @@ function UploadForm({ onClose, onSuccess, defaultCategory }) {
             </div>
           </div>
           <button onClick={submit} disabled={loading} className="w-full py-4 rounded-xl text-base font-semibold active:scale-[0.98] disabled:opacity-40" style={{ background: C.text, color: C.bg }}>
-            {loading ? "Publishing..." : "Publish listing"}
+            {loading ? "Publishing... (calculating walkability)" : "Publish listing"}
           </button>
         </div>
       </div>
