@@ -792,14 +792,32 @@ function MapView({ listings, userLoc, onOpen }) {
 function PhotoUploader({ onPhotosChange }) {
   const [photos, setPhotos] = useState([])
   const [uploading, setUploading] = useState(false)
+  async function compressImage(file) {
+    return new Promise((resolve) => {
+      const img = new Image()
+      img.onload = () => {
+        const maxWidth = 1200
+        const scale = Math.min(1, maxWidth / img.width)
+        const canvas = document.createElement("canvas")
+        canvas.width = img.width * scale
+        canvas.height = img.height * scale
+        const ctx = canvas.getContext("2d")
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+        canvas.toBlob(blob => resolve(blob), "image/jpeg", 0.82)
+      }
+      img.src = URL.createObjectURL(file)
+    })
+  }
+
   async function uploadPhoto(e) {
     const files = Array.from(e.target.files)
     if (photos.length + files.length > 5) { alert("Max 5 photos"); return }
     setUploading(true)
     const urls = []
     for (const file of files) {
-      const filename = Date.now() + "-" + Math.random().toString(36).slice(2) + "-" + file.name.replace(/\s/g, "-")
-      const { error } = await supabase.storage.from("photos").upload(filename, file)
+      const compressed = await compressImage(file)
+      const filename = Date.now() + "-" + Math.random().toString(36).slice(2) + ".jpg"
+      const { error } = await supabase.storage.from("photos").upload(filename, compressed, { contentType: "image/jpeg" })
       if (!error) { const { data } = supabase.storage.from("photos").getPublicUrl(filename); urls.push(data.publicUrl) }
     }
     const newPhotos = [...photos, ...urls]; setPhotos(newPhotos); onPhotosChange(newPhotos); setUploading(false)
