@@ -346,7 +346,24 @@ function ListingDetail({ listing, onClose, onSave, isSaved }) {
   const [tab, setTab] = useState("details")
   const [nearby, setNearby] = useState({ hospital: [], cafe: [], gym: [] })
   const [loadingNearby, setLoadingNearby] = useState(false)
+  const [showShare, setShowShare] = useState(false)
+  const [copied, setCopied] = useState(false)
   const photos = getPhotos(listing)
+
+  function shareOnWhatsApp() {
+    const text = `Check out this rental on Homie!\n\n*${listing.title}*\n📍 ${listing.location}\n💰 ₹${Number(listing.price).toLocaleString()}/mo\n\nDirect from owner · No broker`
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`)
+    setShowShare(false)
+  }
+
+  function copyLink() {
+    const url = `${window.location.origin}${window.location.pathname}?listing=${listing.id}`
+    navigator.clipboard.writeText(url).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+    setShowShare(false)
+  }
 
   useEffect(() => {
     if (tab === "neighborhood" && listing.latitude && listing.longitude && listing.category !== "commercial") {
@@ -366,6 +383,7 @@ function ListingDetail({ listing, onClose, onSave, isSaved }) {
   return (
     <div className="fixed inset-0 z-50 flex flex-col" style={{ background: COLORS.cream }}>
       <button onClick={onClose} className="absolute top-4 left-4 z-30 w-10 h-10 rounded-full flex items-center justify-center text-xl backdrop-blur-md" style={{ background: "rgba(255,255,255,0.9)", color: COLORS.ink }}>←</button>
+      <button onClick={() => setShowShare(true)} className="absolute top-4 right-16 z-30 w-10 h-10 rounded-full flex items-center justify-center text-base backdrop-blur-md" style={{ background: "rgba(255,255,255,0.9)", color: COLORS.ink }}>↑</button>
       <button onClick={() => onSave(listing)} className="absolute top-4 right-4 z-30 w-10 h-10 rounded-full flex items-center justify-center text-base backdrop-blur-md" style={{ background: isSaved ? COLORS.terracotta : "rgba(255,255,255,0.9)", color: isSaved ? COLORS.surface : COLORS.ink }}>
         {isSaved ? "♥" : "♡"}
       </button>
@@ -515,6 +533,37 @@ function ListingDetail({ listing, onClose, onSave, isSaved }) {
           MESSAGE {listing.owner_name?.toUpperCase()}
         </button>
       </div>
+
+      {showShare && (
+        <div className="fixed inset-0 z-[60] flex flex-col justify-end" onClick={() => setShowShare(false)}>
+          <div className="rounded-t-3xl px-5 pb-10 pt-5" style={{ background: COLORS.surface }} onClick={e => e.stopPropagation()}>
+            <div className="w-10 h-1 rounded-full mx-auto mb-5" style={{ background: COLORS.border }} />
+            <p className="text-xs uppercase tracking-widest font-bold mb-5" style={{ color: COLORS.muted, letterSpacing: "0.15em" }}>Share this listing</p>
+            <div className="flex flex-col gap-3">
+              <button onClick={shareOnWhatsApp} className="flex items-center gap-4 px-5 py-4 rounded-xl border w-full text-left transition-all active:scale-[0.98]" style={{ borderColor: COLORS.border, background: COLORS.cream }}>
+                <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0" style={{ background: "#25D366", color: "white" }}>W</div>
+                <div>
+                  <p className="font-bold text-sm" style={{ color: COLORS.ink }}>WhatsApp</p>
+                  <p className="text-xs mt-0.5" style={{ color: COLORS.muted, fontWeight: 300 }}>Send to a friend via WhatsApp</p>
+                </div>
+              </button>
+              <button onClick={copyLink} className="flex items-center gap-4 px-5 py-4 rounded-xl border w-full text-left transition-all active:scale-[0.98]" style={{ borderColor: COLORS.border, background: COLORS.cream }}>
+                <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm border flex-shrink-0" style={{ borderColor: COLORS.border, color: COLORS.ink }}>⊕</div>
+                <div>
+                  <p className="font-bold text-sm" style={{ color: COLORS.ink }}>Copy link</p>
+                  <p className="text-xs mt-0.5" style={{ color: COLORS.muted, fontWeight: 300 }}>Copy a shareable link to clipboard</p>
+                </div>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {copied && (
+        <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-[70] px-5 py-3 rounded-full text-sm font-bold shadow-lg pointer-events-none" style={{ background: COLORS.ink, color: COLORS.surface }}>
+          Link copied!
+        </div>
+      )}
     </div>
   )
 }
